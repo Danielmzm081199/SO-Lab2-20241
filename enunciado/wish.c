@@ -7,6 +7,9 @@
 #define MAX_LINE 1024
 #define MAX_ARGS 100
 
+// Variable global para el path
+char *path[] = {"/bin", "/usr/bin", NULL}; // Se puede modificar según sea necesario
+
 // Función para leer una línea de entrada
 char* read_line() {
     char *line = malloc(MAX_LINE);
@@ -36,16 +39,36 @@ char** split_line(char *line) {
 void execute(char **args) {
     if (args[0] == NULL) return; // No command entered
 
+    // Comando "exit" para salir del shell
     if (strcmp(args[0], "exit") == 0) {
-        exit(0); // Termina el shell si el comando es "exit"
+        if (args[1] != NULL) {
+            fprintf(stderr, "An error has occurred\n");
+        } else {
+            exit(0); // Termina el shell solo si no hay argumentos adicionales
+        }
+        return;
+    }
+
+    // Comando "cd" para cambiar de directorio
+    if (strcmp(args[0], "cd") == 0) {
+        if (args[1] == NULL || args[2] != NULL) {
+            fprintf(stderr, "An error has occurred\n");
+        } else if (chdir(args[1]) != 0) {
+            perror("wish");
+        }
+        return; // Retornar sin forkear el proceso
     }
 
     pid_t pid = fork(); // Crear un proceso hijo
     if (pid == 0) {
-        // Proceso hijo: ejecuta el comando
-        if (execvp(args[0], args) == -1) {
-            perror("wish");
+        // Proceso hijo: intenta ejecutar el comando en cada directorio del path
+        char full_path[MAX_LINE];
+        for (int i = 0; path[i] != NULL; i++) {
+            snprintf(full_path, sizeof(full_path), "%s/%s", path[i], args[0]);
+            execv(full_path, args);
         }
+        // Si llega aquí, execv falló en todos los intentos
+        perror("wish");
         exit(EXIT_FAILURE);
     } else if (pid < 0) {
         // Error en fork()
