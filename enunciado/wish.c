@@ -3,12 +3,17 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 
 #define MAX_LINE 1024
 #define MAX_ARGS 100
 
 // Variable global para el path
-char *path[] = {"/bin", "/usr/bin", NULL}; // Se puede modificar según sea necesario
+//char *path[] = {"/bin", "/usr/bin", NULL}; // Se puede modificar según sea necesario
+
+// Variable global para el path, inicializada con algunos valores predeterminados
+char **path = NULL;
+int path_count = 0; // Número de elementos en el path
 
 // Función para leer una línea de entrada
 char* read_line() {
@@ -35,6 +40,28 @@ char** split_line(char *line) {
     return tokens;
 }
 
+// Función para actualizar la variable global path
+void update_path(char **args) {
+    // Liberar el path existente
+    for (int i = 0; i < path_count; i++) {
+        free(path[i]);
+    }
+    free(path);
+
+    // Contar el número de argumentos (rutas) proporcionados
+    path_count = 0;
+    while (args[path_count + 1] != NULL) {
+        path_count++;
+    }
+
+    // Asignar nuevo espacio para path y copiar las rutas
+    path = malloc((path_count + 1) * sizeof(char*));
+    for (int i = 0; i < path_count; i++) {
+        path[i] = strdup(args[i + 1]);
+    }
+    path[path_count] = NULL; // Terminador para el arreglo
+}
+
 // Función para ejecutar un comando
 void execute(char **args) {
     if (args[0] == NULL) return; // No command entered
@@ -54,25 +81,79 @@ void execute(char **args) {
         if (args[1] == NULL || args[2] != NULL) {
             fprintf(stderr, "An error has occurred\n");
         } else if (chdir(args[1]) != 0) {
-            perror("wish");
+            fprintf(stderr, "An error has occurred\n");
         }
         return; // Retornar sin forkear el proceso
     }
 
-    pid_t pid = fork(); // Crear un proceso hijo
+    // Comando "path" para actualizar las rutas
+    if (strcmp(args[0], "path") == 0) {
+        update_path(args);
+        return; // Retornar sin forkear el proceso
+    }
+
+    // Verificar si hay redirección de salida
+    int redirect_index = -1;
+    int redirect_count = 0;
+    for (int i = 0; args[i] != NULL; i++) {
+        if (strcmp(args[i], ">") == 0) {
+            redirect_index = i;
+            redirect_count++;
+        }
+    }
+
+    // Validar errores de redirección
+    if (redirect_count > 1) {
+        // Error: múltiples símbolos ">"
+        fprintf(stderr, "An error has occurred\n");
+        return;
+    } else if (redirect_index != -1 && args[redirect_index + 1] == NULL) {
+        // Error: no hay archivo después de ">"
+        fprintf(stderr, "An error has occurred\n");
+        return;
+    } else if (redirect_index != -1 && args[redirect_index + 2] != NULL) {
+        // Error: más de un argumento después de ">"
+        fprintf(stderr, "An error has occurred\n");
+        return;
+    }
+
+    // Si se encuentra redirección
+    char *output_file = NULL;
+    if (redirect_index != -1) {
+        output_file = args[redirect_index + 1];
+        args[redirect_index] = NULL; // Cortar los argumentos para el comando
+    }
+
+    pid_t pid = fork();
     if (pid == 0) {
-        // Proceso hijo: intenta ejecutar el comando en cada directorio del path
+        // Proceso hijo: redirigir la salida si es necesario
+        if (output_file != NULL) {
+            int fd = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd < 0) {
+                fprintf(stderr, "An error has occurred\n");
+                exit(EXIT_FAILURE);
+            }
+            // Redirigir stdout al archivo
+            if (dup2(fd, STDOUT_FILENO) < 0) {
+                fprintf(stderr, "An error has occurred\n");
+                exit(EXIT_FAILURE);
+            }
+            close(fd);
+        }
+
+        // Intentar ejecutar el comando en cada directorio del path
         char full_path[MAX_LINE];
-        for (int i = 0; path[i] != NULL; i++) {
+        for (int i = 0; i < path_count; i++) {
             snprintf(full_path, sizeof(full_path), "%s/%s", path[i], args[0]);
             execv(full_path, args);
         }
+
         // Si llega aquí, execv falló en todos los intentos
-        perror("wish");
+        fprintf(stderr, "An error has occurred\n");
         exit(EXIT_FAILURE);
     } else if (pid < 0) {
         // Error en fork()
-        perror("wish");
+        fprintf(stderr, "An error has occurred\n");
     } else {
         // Proceso padre: espera a que el hijo termine
         wait(NULL);
@@ -99,7 +180,7 @@ void interactive_mode() {
 void batch_mode(char *filename) {
     FILE *file = fopen(filename, "r");
     if (file == NULL) {
-        perror("wish");
+        fprintf(stderr, "An error has occurred\n");
         exit(EXIT_FAILURE);
     }
 
@@ -116,6 +197,12 @@ void batch_mode(char *filename) {
 }
 
 int main(int argc, char *argv[]) {
+
+    path = malloc(2 * sizeof(char*));
+    path[0] = strdup("/usr/bin");
+    path[1] = NULL;
+    path_count = 1;
+
     if (argc == 1) {
         // Sin argumentos, ejecutar en modo interactivo
         interactive_mode();
@@ -124,9 +211,14 @@ int main(int argc, char *argv[]) {
         batch_mode(argv[1]);
     } else {
         // Demasiados argumentos, imprimir error
-        fprintf(stderr, "wish: error: too many arguments\n");
+        fprintf(stderr, "An error has occurred\n");
         exit(EXIT_FAILURE);
     }
+
+    for (int i = 0; i < path_count; i++) {
+        free(path[i]);
+    }
+    free(path);
 
     return 0;
 }
